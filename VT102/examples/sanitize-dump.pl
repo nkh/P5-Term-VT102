@@ -1,4 +1,4 @@
-;#!/usr/bin/perl
+#!/usr/bin/perl
 #
 # Example script that sanitizes a log file, such as that created by
 # screen(1) or script(1) (or even one of Term::VT102's other example
@@ -18,6 +18,7 @@ use Term::VT102;
 use strict;
 
 my ($width, $height, $colour) = @ARGV;
+
 $width = 80 if ((not defined $width) || ($width !~ /^\d+$/));
 $height = 24 if ((not defined $height) || ($height !~ /^\d+$/));
 $colour = (defined $colour && $colour !~ /^(colour|color)$/) ? 0 : 1;

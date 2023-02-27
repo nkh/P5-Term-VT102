@@ -21,19 +21,34 @@ BEGIN {
 # Return the packed version of a set of attributes fg, bg, bo, fa, st, ul,
 # bl, rv.
 #
+my ($extended_colors_index, @extended_colors) = (0);
+
 sub attr_pack {
 	shift if ref($_[0]); # called in object context, ditch the object
-	my ($fg, $bg, $bo, $fa, $st, $ul, $bl, $rv) = @_;
+
+	my ($fg, $bg, $bo, $fa, $st, $ul, $bl, $rv, $extended_fg, $extended_bg) = @_;
 	my $num = 0;
 
-	$num = ($fg & 7)
-	  | (($bg & 7) << 4)
-	  | ($bo << 8)
-	  | ($fa << 9)
-	  | ($st << 10)
-	  | ($ul << 11)
-	  | ($bl << 12)
-	  | ($rv << 13);
+	if(defined $extended_fg || defined $extended_bg){
+		$extended_colors_index = 0 if $extended_colors_index > 0b111111111111111 ;
+		$extended_colors[$extended_colors_index++] = [ $fg, $bg, $bo, $fa, $st, $ul, $bl, $rv, $extended_fg, $extended_bg ];
+
+		use File::Slurp qw(append_file);
+		# append_file 'nkh_log', "pack: $fg, $bg, $bo, $fa, $st, $ul, $bl, $rv, $extended_fg, $extended_bg\n" ;
+
+		$num = ($#extended_colors & 0b111111111111111) | (1 << 15); # extended colors
+	} else {
+		$num = ($fg & 7)
+			| (($bg & 7) << 4)
+			| ($bo << 8)
+			| ($fa << 9)
+			| ($st << 10)
+			| ($ul << 11)
+			| ($bl << 12)
+			| ($rv << 13)
+			| (0 << 15); # no extended colors
+	}
+	
 	return pack ('S', $num);
 }
 
@@ -43,20 +58,35 @@ sub attr_pack {
 sub attr_unpack {
 	shift if ref($_[0]); # called in object context, ditch the object
 	my $data = shift;
-	my ($num, $fg, $bg, $bo, $fa, $st, $ul, $bl, $rv);
+	my ($num, $fg, $bg, $bo, $fa, $st, $ul, $bl, $rv) ;
 
 	$num = unpack ('S', $data);
 
-	($fg, $bg, $bo, $fa, $st, $ul, $bl, $rv) = (
-	  $num & 7,
-	  ($num >> 4) & 7,
-	  ($num >> 8) & 1,
-	  ($num >> 9) & 1,
-	  ($num >> 10) & 1,
-	  ($num >> 11) & 1,
-	  ($num >> 12) & 1,
-	  ($num >> 13) & 1
-	);
+	if(($num >> 15) & 1){
+		($fg, $bg, $bo, $fa, $st, $ul, $bl, $rv, my $extended_fg, my $extended_bg) = @{$extended_colors[$num & 0b111111111111111]};
+
+		use File::Slurp qw(append_file);
+		# append_file 'nkh_log', "unpack: $fg, $bg, $bo, $fa, $st, $ul, $bl, $rv, $extended_fg, $extended_bg\n" ;
+
+		$fg = defined $extended_fg ? $extended_fg : $fg + 30 ;
+		$bg = defined $extended_bg ? $extended_bg : $bg + 40 ;
+		# append_file 'nkh_log', "unpack => $fg, $bg\n" ;
+	} else {
+		($fg, $bg, $bo, $fa, $st, $ul, $bl, $rv) = 
+			(
+			$num & 7,
+			($num >> 4) & 7,
+			($num >> 8) & 1,
+			($num >> 9) & 1,
+			($num >> 10) & 1,
+			($num >> 11) & 1,
+			($num >> 12) & 1,
+			($num >> 13) & 1
+			);
+		
+		$fg += 30 ;
+		$bg += 40 ;
+	}
 
 	return ($fg, $bg, $bo, $fa, $st, $ul, $bl, $rv);
 }
@@ -66,7 +96,6 @@ sub attr_unpack {
 #
 use constant DEFAULT_ATTR => (7, 0, 0, 0, 0, 0, 0, 0);
 use constant DEFAULT_ATTR_PACKED => attr_pack(&DEFAULT_ATTR);
-
 
 # Constructor function.
 #
@@ -706,7 +735,8 @@ sub sgr_change {
 	my ($dfg, $dbg, $dbo, $dfa, $dst, $dul, $dbl, $drv) = attr_unpack ($dest);
 
 	if (($sfg != $dfg) || ($sbg != $dbg)) {
-		$out .= sprintf ("\e[m\e[3%d;4%dm", $dfg, $dbg);
+		$out .= sprintf ("\e[m\e[%s;%sm", $dfg, $dbg);
+		# $out .= sprintf ("\e[m\e[3%d;4%dm", $dfg, $dbg);
 		($sbo, $sfa, $sst, $sul, $sbl, $srv) = (0, 0, 0, 0, 0, 0);
 	}
 
@@ -767,7 +797,13 @@ sub row_sgrtext {
 		$char =~ s/\0/ /g;
 		$char = ' ' if ($char !~ /./);
 		$attr_next = substr ($row_attr, ($startcol - 1) * 2, 2);
-		$text .= $self->sgr_change ($attr_cur, $attr_next) . $char;
+		my $na .= $self->sgr_change ($attr_cur, $attr_next);
+		$text .= $na . $char;
+		# $text .= $self->sgr_change ($attr_cur, $attr_next) . $char;
+
+		use File::Slurp qw(append_file);
+		# append_file('nkh_log', "row_sgrtext: $na, $char\n") ;
+
 		$attr_cur = $attr_next;
 	}
 
@@ -1658,9 +1694,10 @@ sub _code_SGR {                         # set graphic rendition
 	my $self = shift;
 	my (@parms) = (@_);
 	my ($val, $fg, $bg, $bo, $fa, $st, $ul, $bl, $rv);
+	my ($extended_fg, $extended_bg);
 
 	($fg, $bg, $bo, $fa, $st, $ul, $bl, $rv) =
-	  $self->attr_unpack ($self->{'attr'});
+		$self->attr_unpack ($self->{'attr'});
 
 	@parms = (0) if ($#parms < 0);                # ESC [ m = ESC [ 0 m
 
@@ -1689,18 +1726,28 @@ sub _code_SGR {                         # set graphic rendition
 			$rv = 0;
 		} elsif (($val >= 30) && ($val <= 37)) {# set foreground colour
 			$fg = $val - 30;
-		} elsif ($val == 38) {               # underline on, default fg
-			($ul, $fg) = (1, 7);
+		} elsif ($val == 38) {
+			if(defined $parms[0] && $parms[0] == 2){ # 38;2;r;g;b
+				$extended_fg = $fg = "38;" . (shift @parms) . ";" . (shift @parms) . ";" . (shift @parms) . ";" . (shift @parms) ;
+			} elsif (defined $parms[0] && $parms[0] == 5) { # 38;5;x
+				$extended_fg = "38;" . (shift @parms) . ";" . (shift @parms) ;
+			}
 		} elsif ($val == 39) {               # underline off, default fg
 			($ul, $fg) = (0, 7);
 		} elsif (($val >= 40) && ($val <= 47)) {# set background colour
 			$bg = $val - 40;
+		} elsif ($val == 48) { 
+			$fg = 0 ;
+			if(defined $parms[0] && $parms[0] == 2) { # 48;2;r;g;b
+				$extended_bg = "48;" . (shift @parms) . ";" . (shift @parms) . ";" . (shift @parms) . ";" . (shift @parms) ;
+			} elsif (defined $parms[0] && $parms[0] == 5) { # ;5;x
+				$extended_bg = "48;" . (shift @parms) . ";" . (shift @parms) ;
+			}
 		} elsif ($val == 49) {               # default background
 			$bg = 0;
 		}
 	}
-
-	$self->{'attr'} = $self->attr_pack ($fg, $bg, $bo, $fa, $st, $ul, $bl, $rv);
+	$self->{'attr'} = $self->attr_pack ($fg, $bg, $bo, $fa, $st, $ul, $bl, $rv, $extended_fg, $extended_bg);
 }
 
 sub _code_VPA {                         # move to row (current column)

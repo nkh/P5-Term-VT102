@@ -3,3 +3,8 @@ Things still to do:
   - functions for Expect-like behaviour
 
 Any assistance would be appreciated.
+
+speedup:
+	no need to call srg_change if attribute hasn't changed
+	no need to do cell by cell display if attributes don't change
+
